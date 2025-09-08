@@ -280,4 +280,528 @@
         </div>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
     
+    <!-- Firebase Configuration -->
+    <script type="module">
+        // Firebase imports
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-app.js";
+        import { getFirestore, collection, getDocs, addDoc, query, orderBy, limit, where, onSnapshot } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-firestore.js";
+
+        // Firebase configuration
+        const firebaseConfig = {
+            apiKey: "AIzaSyCqvtp0IWvJFQgbVuj4NsSgQQDVtvwD1tY",
+            authDomain: "the-tumaric-indian-cusine.firebaseapp.com",
+            projectId: "the-tumaric-indian-cusine",
+            storageBucket: "the-tumaric-indian-cusine.firebasestorage.app",
+            messagingSenderId: "808473473804",
+            appId: "1:808473473804:web:2c7cf4c307f3a3d1a78f29",
+            measurementId: "G-S35W1JTW9L"
+        };
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        // Global variables
+        let salesChart;
+        let ordersData = [];
+        let usersData = [];
+        let menusData = [];
+        let feedbacksData = [];
+        let autoRefreshInterval;
+
+        // Initialize dashboard
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeDashboard();
+            startAutoRefresh();
+        });
+
+        async function initializeDashboard() {
+            try {
+                await loadData();
+                updateStatCards();
+                loadRecentOrders();
+                initializeSalesChart();
+                setupRealTimeListeners();
+            } catch (error) {
+                console.error('Error initializing dashboard:', error);
+                showError('Failed to load dashboard data');
+            }
+        }
+
+        function startAutoRefresh() {
+            // Auto refresh every 5 seconds
+            autoRefreshInterval = setInterval(async () => {
+                try {
+                    await loadData();
+                    updateStatCards();
+                    loadRecentOrders();
+                    updateSalesChart();
+                } catch (error) {
+                    console.error('Error during auto refresh:', error);
+                }
+            }, 5000);
+        }
+
+        async function loadData() {
+            try {
+                // Load orders
+                const ordersSnapshot = await getDocs(collection(db, 'orders'));
+                ordersData = ordersSnapshot.docs.map(doc => ({
+                    id: doc.id,
+                    ...doc.data()
+                }));
+
+                // Load users
+                const usersSnapshot = await getDocs(collection(db, 'users'));
+                usersData = usersSnapshot.docs.map(doc => ({
+                    id: doc.id,
+                    ...doc.data()
+                }));
+
+                // Load menus
+                const menusSnapshot = await getDocs(collection(db, 'menus'));
+                menusData = menusSnapshot.docs.map(doc => ({
+                    id: doc.id,
+                    ...doc.data()
+                }));
+
+                // Load feedbacks
+                const feedbacksSnapshot = await getDocs(collection(db, 'feedbacks'));
+                feedbacksData = feedbacksSnapshot.docs.map(doc => ({
+                    id: doc.id,
+                    ...doc.data()
+                }));
+
+            } catch (error) {
+                console.error('Error loading data:', error);
+                throw error;
+            }
+        }
+
+        function updateStatCards() {
+            // Get today's date range
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const tomorrow = new Date(today);
+            tomorrow.setDate(tomorrow.getDate() + 1);
+
+            // Filter today's orders
+            const todayOrders = ordersData.filter(order => {
+                const orderDate = order.createdAt?.toDate ? order.createdAt.toDate() : new Date(order.createdAt);
+                return orderDate >= today && orderDate < tomorrow;
+            });
+
+            // Today's Orders Count
+            document.getElementById('todayOrders').textContent = todayOrders.length.toLocaleString();
+
+            // Today's Revenue - exclude rejected orders
+            const todayRevenue = todayOrders
+                .filter(order => order.status?.toLowerCase() !== 'rejected')
+                .reduce((sum, order) => sum + (order.total || 0), 0);
+            document.getElementById('todayRevenue').textContent = '£' + todayRevenue.toLocaleString();
+
+            // Pending Deliveries (all pending orders, not just today's)
+            const pendingDeliveries = ordersData.filter(order => 
+                order.status === 'pending' || order.status === 'preparing' || order.status === 'ready'
+            ).length;
+            document.getElementById('pendingDeliveries').textContent = pendingDeliveries;
+
+            // Average Rating
+            const averageRating = feedbacksData.length > 0 
+                ? (feedbacksData.reduce((sum, feedback) => sum + (feedback.rating || 0), 0) / feedbacksData.length).toFixed(1)
+                : '0.0';
+            document.getElementById('averageRating').textContent = averageRating;
+        }
+
+        function loadRecentOrders() {
+            const recentOrdersContainer = document.getElementById('recentOrders');
+            
+            if (ordersData.length === 0) {
+                recentOrdersContainer.innerHTML = '<p class="text-center text-muted">No orders found</p>';
+                return;
+            }
+
+            // Sort orders by creation date and take last 5
+            const recentOrders = ordersData
+                .sort((a, b) => {
+                    const dateA = a.createdAt?.toDate ? a.createdAt.toDate() : new Date(a.createdAt);
+                    const dateB = b.createdAt?.toDate ? b.createdAt.toDate() : new Date(b.createdAt);
+                    return dateB - dateA;
+                })
+                .slice(0, 5);
+
+            let html = '<div class="list-group list-group-flush">';
+            
+            recentOrders.forEach(order => {
+                const timeAgo = getTimeAgo(order.createdAt?.toDate ? order.createdAt.toDate() : new Date(order.createdAt));
+                const badgeClass = getStatusBadgeClass(order.status);
+                const itemsText = order.items?.length > 0 ? order.items[0].name + (order.items.length > 1 ? ` +${order.items.length - 1} more` : '') : 'No items';
+                
+                html += `
+                    <div class="list-group-item d-flex justify-content-between align-items-center px-0">
+                        <div>
+                            <h6 class="mb-1">Order #${order.orderId || order.id}</h6>
+                            <p class="mb-1 text-muted small">${itemsText}</p>
+                            <small class="text-muted">${timeAgo}</small>
+                        </div>
+                        <span class="badge ${badgeClass} rounded-pill">${order.status || 'Unknown'}</span>
+                    </div>
+                `;
+            });
+            
+            html += '</div>';
+            html += `
+                <div class="text-center mt-3">
+                    <a href="index.php?page=orders" class="btn btn-outline-primary btn-sm" onclick="viewAllOrders(); return false;">View All Orders</a>
+                </div>
+            `;
+            
+            recentOrdersContainer.innerHTML = html;
+        }
+
+        function initializeSalesChart() {
+            const ctx = document.getElementById('salesChart').getContext('2d');
+            
+            // Generate last 7 days data
+            const last7Days = [];
+            const salesData = [];
+            
+            for (let i = 6; i >= 0; i--) {
+                const date = new Date();
+                date.setDate(date.getDate() - i);
+                date.setHours(0, 0, 0, 0);
+                
+                const nextDate = new Date(date);
+                nextDate.setDate(nextDate.getDate() + 1);
+                
+                const dayRevenue = ordersData
+                    .filter(order => {
+                        const orderDate = order.createdAt?.toDate ? order.createdAt.toDate() : new Date(order.createdAt);
+                        return orderDate >= date && orderDate < nextDate;
+                    })
+                    .reduce((sum, order) => sum + (order.total || 0), 0);
+                
+                last7Days.push(date.toLocaleDateString('en-US', { weekday: 'short' }));
+                salesData.push(dayRevenue);
+            }
+
+            salesChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: last7Days,
+                    datasets: [{
+                        label: 'Revenue (£)',
+                        data: salesData,
+                        borderColor: 'rgb(75, 192, 192)',
+                        backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                        tension: 0.1,
+                        fill: true
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: {
+                                callback: function(value) {
+                                    return '£' + value.toLocaleString();
+                                }
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'top'
+                        }
+                    }
+                }
+            });
+        }
+
+        function setupRealTimeListeners() {
+            // Listen for new orders
+            onSnapshot(collection(db, 'orders'), (snapshot) => {
+                ordersData = snapshot.docs.map(doc => ({
+                    id: doc.id,
+                    ...doc.data()
+                }));
+                updateStatCards();
+                loadRecentOrders();
+                updateSalesChart();
+            });
+
+            // Listen for new feedbacks
+            onSnapshot(collection(db, 'feedbacks'), (snapshot) => {
+                feedbacksData = snapshot.docs.map(doc => ({
+                    id: doc.id,
+                    ...doc.data()
+                }));
+                updateStatCards();
+            });
+        }
+
+        function updateSalesChart() {
+            if (!salesChart) return;
+            
+            // Update chart data
+            const last7Days = [];
+            const salesData = [];
+            
+            for (let i = 6; i >= 0; i--) {
+                const date = new Date();
+                date.setDate(date.getDate() - i);
+                date.setHours(0, 0, 0, 0);
+                
+                const nextDate = new Date(date);
+                nextDate.setDate(nextDate.getDate() + 1);
+                
+                const dayRevenue = ordersData
+                    .filter(order => {
+                        const orderDate = order.createdAt?.toDate ? order.createdAt.toDate() : new Date(order.createdAt);
+                        return orderDate >= date && orderDate < nextDate;
+                    })
+                    .reduce((sum, order) => sum + (order.total || 0), 0);
+                
+                last7Days.push(date.toLocaleDateString('en-US', { weekday: 'short' }));
+                salesData.push(dayRevenue);
+            }
+            
+            salesChart.data.labels = last7Days;
+            salesChart.data.datasets[0].data = salesData;
+            salesChart.update();
+        }
+
+        // Utility functions
+        function getTimeAgo(date) {
+            const now = new Date();
+            const diffInMinutes = Math.floor((now - date) / (1000 * 60));
+            
+            if (diffInMinutes < 1) return 'Just now';
+            if (diffInMinutes < 60) return `${diffInMinutes} minutes ago`;
+            if (diffInMinutes < 1440) return `${Math.floor(diffInMinutes / 60)} hours ago`;
+            return `${Math.floor(diffInMinutes / 1440)} days ago`;
+        }
+
+        function getStatusBadgeClass(status) {
+            switch (status?.toLowerCase()) {
+                case 'pending': return 'bg-warning';
+                case 'preparing': return 'bg-primary';
+                case 'ready': return 'bg-success';
+                case 'delivered': return 'bg-info';
+                case 'cancelled': return 'bg-danger';
+                default: return 'bg-secondary';
+            }
+        }
+
+        function showError(message) {
+            const errorHtml = `<div class="error-message">${message}</div>`;
+            document.querySelectorAll('.stats-number').forEach(el => {
+                if (el.querySelector('.loading')) {
+                    el.innerHTML = 'Error';
+                }
+            });
+        }
+
+        // Navigation Functions
+        window.navigateToPage = function(page) {
+            // Check if we're in a PHP environment or single-page application
+            if (typeof window !== 'undefined' && window.location.href.includes('index.php')) {
+                // PHP template navigation
+                window.location.href = `index.php?page=${page}`;
+            } else {
+                // For standalone dashboard, show appropriate modals or redirect
+                switch(page) {
+                    case 'orders':
+                        showOrdersPage();
+                        break;
+                    case 'menu':
+                        showMenuPage();
+                        break;
+                    case 'promotions':
+                        showPromotionsPage();
+                        break;
+                    case 'reports':
+                        showReportsPage();
+                        break;
+                    default:
+                        // For now, show a coming soon message
+                        alert(`${page.charAt(0).toUpperCase() + page.slice(1)} page functionality will be available soon!`);
+                }
+            }
+        };
+
+        // Quick Action Functions
+        window.createNewOrder = function() {
+            // Check if this should navigate to orders page or show modal
+            if (typeof window !== 'undefined' && window.location.href.includes('index.php')) {
+                window.location.href = 'index.php?page=orders';
+            } else {
+                showNewOrderModal();
+            }
+        };
+
+        window.showNewOrderModal = async function() {
+            try {
+                // Load users for customer dropdown
+                const customerSelect = document.getElementById('customerId');
+                customerSelect.innerHTML = '<option value="">Select Customer</option>';
+                
+                usersData.forEach(user => {
+                    customerSelect.innerHTML += `<option value="${user.id}">${user.name || user.email || 'User ' + user.id}</option>`;
+                });
+
+                // Load menu items
+                const menuContainer = document.getElementById('menuItems');
+                menuContainer.innerHTML = '';
+                
+                menusData.forEach(item => {
+                    menuContainer.innerHTML += `
+                        <div class="form-check d-flex justify-content-between align-items-center mb-2">
+                            <div>
+                                <input class="form-check-input menu-item" type="checkbox" value="${item.id}" 
+                                       data-price="${item.price}" data-name="${item.name || 'Unnamed Item'}">
+                                <label class="form-check-label">
+                                    ${item.name || 'Unnamed Item'} - £${item.price || 0}
+                                </label>
+                            </div>
+                            <input type="number" class="form-control" style="width: 80px;" placeholder="Qty" 
+                                   min="1" value="1" onchange="updateOrderTotal()">
+                        </div>
+                    `;
+                });
+
+                // Show modal
+                new bootstrap.Modal(document.getElementById('newOrderModal')).show();
+                
+            } catch (error) {
+                console.error('Error loading order modal:', error);
+                alert('Error loading order form');
+            }
+        };
+
+        window.updateOrderTotal = function() {
+            let total = 0;
+            document.querySelectorAll('.menu-item:checked').forEach(checkbox => {
+                const price = parseFloat(checkbox.dataset.price) || 0;
+                const qty = parseInt(checkbox.closest('.form-check').querySelector('input[type="number"]').value) || 1;
+                total += price * qty;
+            });
+            document.getElementById('orderTotal').textContent = total;
+        };
+
+        window.submitOrder = async function() {
+            try {
+                const customerId = document.getElementById('customerId').value;
+                const deliveryAddress = document.getElementById('deliveryAddress').value;
+                
+                if (!customerId || !deliveryAddress) {
+                    alert('Please fill in all required fields');
+                    return;
+                }
+
+                const selectedItems = [];
+                let total = 0;
+
+                document.querySelectorAll('.menu-item:checked').forEach(checkbox => {
+                    const price = parseFloat(checkbox.dataset.price) || 0;
+                    const name = checkbox.dataset.name;
+                    const qty = parseInt(checkbox.closest('.form-check').querySelector('input[type="number"]').value) || 1;
+                    
+                    selectedItems.push({
+                        foodId: checkbox.value,
+                        name: name,
+                        price: price,
+                        qty: qty
+                    });
+                    
+                    total += price * qty;
+                });
+
+                if (selectedItems.length === 0) {
+                    alert('Please select at least one menu item');
+                    return;
+                }
+
+                const orderData = {
+                    createdAt: new Date(),
+                    updatedAt: new Date(),
+                    deliveryAddress: deliveryAddress,
+                    items: selectedItems,
+                    orderId: 'ORD' + Date.now(),
+                    status: 'pending',
+                    total: total,
+                    userId: customerId
+                };
+
+                await addDoc(collection(db, 'orders'), orderData);
+                
+                // Close modal and reset form
+                bootstrap.Modal.getInstance(document.getElementById('newOrderModal')).hide();
+                document.getElementById('newOrderForm').reset();
+                document.getElementById('orderTotal').textContent = '0';
+                
+                alert('Order created successfully!');
+                
+            } catch (error) {
+                console.error('Error creating order:', error);
+                alert('Error creating order');
+            }
+        };
+
+        window.addMenuItem = function() {
+            navigateToPage('menu');
+        };
+
+        window.createPromotion = function() {
+            navigateToPage('promotions');
+        };
+
+        window.viewReports = function() {
+            navigateToPage('reports');
+        };
+
+        window.viewAllOrders = function() {
+            navigateToPage('orders');
+        };
+
+        // Page display functions for standalone mode
+        window.showOrdersPage = function() {
+            // Create a full-screen modal or redirect to orders management
+            alert('Orders Management Page\n\nFeatures:\n• View all orders\n• Update order status\n• Track deliveries\n• Customer details\n\nThis would show a complete orders management interface.');
+        };
+
+        window.showMenuPage = function() {
+            alert('Menu Management Page\n\nFeatures:\n• Add new menu items\n• Edit existing items\n• Manage categories\n• Set pricing\n• Upload images\n\nThis would show a complete menu management interface.');
+        };
+
+        window.showPromotionsPage = function() {
+            alert('Promotions Management Page\n\nFeatures:\n• Create discount coupons\n• Set promotional offers\n• Manage seasonal deals\n• Track promotion usage\n\nThis would show a complete promotions management interface.');
+        };
+
+        window.showReportsPage = function() {
+            alert('Reports & Analytics Page\n\nFeatures:\n• Detailed sales reports\n• Customer analytics\n• Performance metrics\n• Export capabilities\n• Revenue trends\n\nThis would show comprehensive reporting dashboards.');
+        };
+
+        // Add event listeners for menu item checkboxes
+        document.addEventListener('change', function(e) {
+            if (e.target.classList.contains('menu-item')) {
+                updateOrderTotal();
+            }
+        });
+
+        // Clean up auto refresh on page unload
+        window.addEventListener('beforeunload', function() {
+            if (autoRefreshInterval) {
+                clearInterval(autoRefreshInterval);
+            }
+        });
+
+    </script>
+</body>
+</html>
