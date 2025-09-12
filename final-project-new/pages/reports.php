@@ -334,7 +334,8 @@
             </div>
         </div>
     </div>
-     <!-- Include Firebase and required libraries -->
+
+    <!-- Include Firebase and required libraries -->
     <script type="module">
         // Firebase configuration
         import { initializeApp } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-app.js";
